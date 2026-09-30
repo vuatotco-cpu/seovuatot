@@ -1,14 +1,16 @@
 'use client'
 
-import { useState, Suspense } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useState, useEffect, Suspense } from 'react'
+import { useSearchParams, useRouter } from 'next/navigation'
 import {
-  Brain, Copy, Download, Globe, Loader2, Save, Sparkles,
-  Zap, ToggleLeft, ToggleRight, RefreshCw, CheckCircle, XCircle,
-  PenSquare, TrendingUp, Target, ArrowRight, ChevronDown, Image
+  Copy, Globe, Loader2, Save, Sparkles,
+  Zap, RefreshCw, CheckCircle, XCircle,
+  TrendingUp, Target, ArrowRight, ChevronDown, Image
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+
+interface Website { id: string; domain: string; name: string; cms_type?: string; wp_url?: string; wp_username?: string; wp_app_password?: string }
 
 type Mode = 'deep-dive' | 'news-trend' | 'competitor'
 
@@ -35,6 +37,7 @@ const IMAGE_CONFIGS = [
 
 function NewContentForm() {
   const searchParams = useSearchParams()
+  const router = useRouter()
   const initialMode = (searchParams.get('mode') as Mode) || 'deep-dive'
   const [mode, setMode] = useState<Mode>(initialMode)
   const [keyword, setKeyword] = useState(searchParams.get('keyword') || '')
@@ -47,6 +50,21 @@ function NewContentForm() {
   const [content, setContent] = useState('')
   const [saving, setSaving] = useState(false)
   const [publishing, setPublishing] = useState(false)
+  const [savedArticleId, setSavedArticleId] = useState<string | null>(null)
+
+  // Websites
+  const [websites, setWebsites] = useState<Website[]>([])
+  const [selectedSiteId, setSelectedSiteId] = useState<string>('')
+
+  useEffect(() => {
+    fetch('/api/websites').then(r => r.json()).then(d => {
+      const sites = d.websites ?? []
+      setWebsites(sites)
+      if (sites.length > 0) setSelectedSiteId(sites[0].id)
+    }).catch(() => {})
+  }, [])
+
+  const selectedSite = websites.find(s => s.id === selectedSiteId)
 
   // Autopilot options
   const [autopilot, setAutopilot] = useState({
@@ -104,37 +122,78 @@ function NewContentForm() {
     if (!content) return
     setSaving(true)
     try {
+      const wc = content.split(/\s+/).length
       const res = await fetch('/api/articles', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: title || keyword, keyword, content, status: 'pending_review' }),
+        body: JSON.stringify({
+          title: title || keyword,
+          keyword,
+          content,
+          status: 'pending_review',
+          website_id: selectedSiteId || undefined,
+          word_count: wc,
+          mode,
+          language: 'vi',
+        }),
       })
-      if (res.ok) toast.success('Đã lưu vào database!')
-      else toast.info('Lưu thất bại — cấu hình Supabase để lưu bài')
-    } catch { toast.info('Chưa kết nối Supabase') }
+      const data = await res.json()
+      if (res.ok && data.id) {
+        setSavedArticleId(data.id)
+        toast.success('Đã lưu vào database!')
+      } else {
+        toast.error(data.error || 'Lưu thất bại')
+      }
+    } catch { toast.error('Lỗi kết nối') }
     setSaving(false)
   }
 
   const handlePublish = async () => {
     if (!content) return
-    const config = JSON.parse(localStorage.getItem('website_publish_config') || '{}')
-    if (!config.adminUrl || !config.username) {
-      toast.error('Chưa cấu hình website. Vào Cài đặt → Xuất Bản CMS')
-      return
-    }
+    if (!selectedSite) { toast.error('Chưa chọn website. Thêm website trong Quản lý website.'); return }
+
     setPublishing(true)
     try {
-      const res = await fetch('/api/publish/laravel', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ article: { title: title || keyword, content, keyword }, config }),
-      })
-      const data = await res.json()
-      if (data.success) {
-        toast.success(`✅ Đã đăng lên ${data.selectedCategory || 'website'}!`)
-        if (data.postUrl) window.open(data.postUrl, '_blank')
+      const site = selectedSite
+      // Try WordPress REST API first
+      if (site.wp_url && site.wp_username && site.wp_app_password) {
+        const res = await fetch('/api/publish/wordpress', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            articleId: savedArticleId,
+            title: title || keyword,
+            content,
+            keyword,
+            wpUrl: site.wp_url,
+            wpUsername: site.wp_username,
+            wpAppPassword: site.wp_app_password,
+            status: 'publish',
+          }),
+        })
+        const data = await res.json()
+        if (data.success || data.postUrl) {
+          toast.success('Đã đăng lên WordPress!')
+          if (data.postUrl) window.open(data.postUrl, '_blank')
+        } else {
+          toast.error(data.error || 'Đăng bài thất bại')
+        }
       } else {
-        toast.error(data.error || 'Đăng bài thất bại')
+        // Fallback to Laravel config from settings
+        const config = JSON.parse(localStorage.getItem('website_publish_config') || '{}')
+        if (!config.adminUrl) { toast.error('Chưa cấu hình website. Vào Cài đặt → Xuất Bản CMS'); setPublishing(false); return }
+        const res = await fetch('/api/publish/laravel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ article: { title: title || keyword, content, keyword }, config }),
+        })
+        const data = await res.json()
+        if (data.success) {
+          toast.success(`Đã đăng lên ${data.selectedCategory || 'website'}!`)
+          if (data.postUrl) window.open(data.postUrl, '_blank')
+        } else {
+          toast.error(data.error || 'Đăng bài thất bại')
+        }
       }
     } catch { toast.error('Không kết nối được website') }
     setPublishing(false)
@@ -166,14 +225,31 @@ function NewContentForm() {
           {/* Step 1: Website */}
           <div className="bg-white rounded-xl border border-gray-100 p-5">
             <p className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">1. Chọn Website Mục Tiêu</p>
-            <div className="flex items-center gap-3 p-3 border border-brand-200 bg-brand-50 rounded-lg">
-              <Globe className="w-5 h-5 text-brand-600" />
-              <div className="flex-1">
-                <p className="text-sm font-semibold text-gray-900">vuatot.vn</p>
-                <p className="text-xs text-gray-500">Ngôn ngữ bài viết: Tiếng Việt (được đặt theo website này)</p>
+            {websites.length === 0 ? (
+              <div className="flex items-center gap-3 p-3 border border-yellow-200 bg-yellow-50 rounded-lg">
+                <Globe className="w-5 h-5 text-yellow-600" />
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-gray-900">Chưa có website</p>
+                  <p className="text-xs text-gray-500">Thêm website trước khi tạo bài</p>
+                </div>
+                <a href="/dashboard/websites" className="text-xs bg-yellow-100 text-yellow-700 px-2.5 py-1 rounded-full font-medium hover:bg-yellow-200">Thêm ngay</a>
               </div>
-              <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">Đã kết nối</span>
-            </div>
+            ) : (
+              <select
+                value={selectedSiteId}
+                onChange={e => setSelectedSiteId(e.target.value)}
+                className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
+              >
+                {websites.map(s => (
+                  <option key={s.id} value={s.id}>{s.name} ({s.domain})</option>
+                ))}
+              </select>
+            )}
+            {selectedSite && (
+              <p className="text-xs text-gray-400 mt-1.5 ml-1">
+                CMS: {selectedSite.cms_type ?? 'wordpress'} {selectedSite.wp_url ? `— ${selectedSite.wp_url}` : ''}
+              </p>
+            )}
           </div>
 
           {/* Step 2: Writing Mode */}

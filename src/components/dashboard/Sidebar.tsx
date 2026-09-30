@@ -5,10 +5,10 @@ import { usePathname } from 'next/navigation'
 import {
   Brain, ChevronLeft, FileText, Globe, LayoutDashboard, Search,
   Settings, Share2, Sparkles, TrendingDown, CreditCard, ThumbsUp,
-  Wrench, RefreshCw, Target, PenSquare,
+  Wrench, RefreshCw, Target, PenSquare, Coins, Code2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import React from 'react'
 
 type NavLeaf = { href: string; label: string; icon: React.ElementType; badge?: number }
@@ -42,6 +42,7 @@ const navItems: NavItem[] = [
     items: [
       { href: '/dashboard/websites', label: 'Quản lý website', icon: Globe },
       { href: '/dashboard/settings', label: 'Cài đặt', icon: Settings },
+      { href: '/dashboard/developer', label: 'API Developer', icon: Code2 },
       { href: '/dashboard/billing', label: 'Bảng giá', icon: CreditCard },
     ],
   },
@@ -50,6 +51,24 @@ const navItems: NavItem[] = [
 export default function Sidebar() {
   const pathname = usePathname()
   const [collapsed, setCollapsed] = useState(false)
+  const [credits, setCredits] = useState<number | null>(null)
+  const [planId, setPlanId] = useState<string>('free')
+
+  useEffect(() => {
+    fetch('/api/credits/balance')
+      .then(r => r.json())
+      .then(d => {
+        if (d.credits !== undefined) setCredits(d.credits)
+        if (d.planId) setPlanId(d.planId)
+      })
+      .catch(() => {})
+  }, [])
+
+  function fmtCredits(n: number): string {
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
+    if (n >= 1_000)     return (n / 1_000).toFixed(1) + 'K'
+    return n.toLocaleString()
+  }
 
   return (
     <aside className={cn(
@@ -144,6 +163,21 @@ export default function Sidebar() {
           )
         })}
       </nav>
+
+      {/* Credits display */}
+      {!collapsed && credits !== null && (
+        <div className="px-3 py-2 border-t border-gray-100">
+          <Link href="/dashboard/billing"
+            className="flex items-center gap-2 p-2 rounded-lg hover:bg-gray-50 transition-colors group">
+            <Coins className="w-4 h-4 text-yellow-500 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-semibold text-gray-900">{fmtCredits(credits)} credits</p>
+              <p className="text-[10px] text-gray-400 capitalize">{planId} plan</p>
+            </div>
+            <span className="text-[10px] text-brand-600 group-hover:underline">Nâng cấp</span>
+          </Link>
+        </div>
+      )}
 
       {/* User */}
       {!collapsed && (

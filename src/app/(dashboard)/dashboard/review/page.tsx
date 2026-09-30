@@ -21,7 +21,7 @@ interface PendingArticle {
   image_credit?: string
 }
 
-// Mock data - thực tế sẽ lấy từ Supabase
+// Legacy mock data — kept only as type reference, not used
 const MOCK_ARTICLES: PendingArticle[] = [
   {
     id: '1',
@@ -165,34 +165,24 @@ export default function ReviewPage() {
     setLoadingArticles(true)
     try {
       const res = await fetch('/api/articles?status=pending_review')
+      if (!res.ok) { setLoadingArticles(false); return }
       const data = await res.json()
-      setDbConnected(data.db_connected)
-      if (data.db_connected && data.articles?.length > 0) {
-        // Map Supabase articles to PendingArticle shape
-        const mapped: PendingArticle[] = data.articles.map((a: any) => ({
-          id: a.id,
-          keyword: a.target_keyword,
-          title: a.title,
-          content: a.content || '',
-          word_count: a.word_count || 0,
-          intent: a.intent || 'Informational',
-          reason: a.seo_reason || `Volume: ${a.keyword_volume || '—'} | KD: ${a.keyword_kd || '—'}`,
-          generated_at: a.created_at,
-          status: 'pending_review',
-          image_url: a.image_url,
-          image_source: a.image_source,
-          image_alt: a.image_alt,
-        }))
-        setArticles(mapped)
-        if (mapped.length > 0) setSelectedArticle(mapped[0])
-      } else {
-        // Fallback to demo data when DB not connected
-        setArticles(MOCK_ARTICLES)
-        setSelectedArticle(MOCK_ARTICLES[0])
-      }
+      setDbConnected(true)
+      const mapped: PendingArticle[] = (data.articles ?? []).map((a: Record<string, unknown>) => ({
+        id: a.id as string,
+        keyword: (a.target_keyword as string) ?? '',
+        title: (a.title as string) ?? '',
+        content: (a.content as string) ?? '',
+        word_count: (a.word_count as number) ?? 0,
+        intent: 'Informational',
+        reason: `Bài viết AI tạo`,
+        generated_at: (a.created_at as string) ?? new Date().toISOString(),
+        status: 'pending_review',
+      }))
+      setArticles(mapped)
+      if (mapped.length > 0) setSelectedArticle(mapped[0])
     } catch {
-      setArticles(MOCK_ARTICLES)
-      setSelectedArticle(MOCK_ARTICLES[0])
+      // DB chưa sẵn sàng — hiển thị empty state
     }
     setLoadingArticles(false)
   }
@@ -200,16 +190,18 @@ export default function ReviewPage() {
   const pendingCount = articles.filter(a => a.status === 'pending_review').length
   const approvedCount = articles.filter(a => a.status === 'approved').length
 
-  const handleApprove = (id: string) => {
+  const handleApprove = async (id: string) => {
     setArticles(prev => prev.map(a => a.id === id ? { ...a, status: 'approved' } : a))
     if (selectedArticle?.id === id) setSelectedArticle(prev => prev ? { ...prev, status: 'approved' } : null)
+    await fetch('/api/articles', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, status: 'draft' }) })
     toast.success('Đã duyệt bài! Bài viết sẽ được lên lịch publish.')
   }
 
-  const handleReject = (id: string) => {
-    setArticles(prev => prev.map(a => a.id === id ? { ...a, status: 'rejected' } : a))
+  const handleReject = async (id: string) => {
+    setArticles(prev => prev.filter(a => a.id !== id))
     if (selectedArticle?.id === id) setSelectedArticle(null)
-    toast.info('Đã bỏ qua bài viết này.')
+    await fetch('/api/articles', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) })
+    toast.info('Đã xóa bài viết này.')
   }
 
   const handlePublishToWebsite = async (article: PendingArticle) => {

@@ -157,10 +157,14 @@ export default function ContentPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
+                  <Link href={`/dashboard/content/${article.id}`}
+                    className="flex items-center gap-1 text-xs text-gray-500 border border-gray-200 px-2.5 py-1.5 rounded-lg hover:bg-gray-50">
+                    <Eye className="w-3 h-3" /> Xem
+                  </Link>
                   {article.published_url && (
                     <a href={article.published_url} target="_blank" rel="noopener noreferrer"
                       className="flex items-center gap-1 text-xs text-green-600 hover:underline">
-                      <ExternalLink className="w-3 h-3" /> Xem
+                      <ExternalLink className="w-3 h-3" /> Live
                     </a>
                   )}
                   {article.status === 'pending_review' && (

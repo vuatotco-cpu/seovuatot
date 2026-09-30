@@ -2,13 +2,15 @@
 
 import {
   Globe, Key, Loader2, Save, Zap, CheckCircle, XCircle,
-  RefreshCw, Settings, Bell, FileText, Image, Cpu
+  RefreshCw, Settings, Bell, FileText, Image, Cpu, Search, Plus, Trash2
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 
-type Tab = 'general' | 'ai_keys' | 'publishing' | 'automation' | 'notifications'
+type Tab = 'general' | 'ai_keys' | 'publishing' | 'automation' | 'notifications' | 'indexing'
+
+interface IndexProject { id: string; project_name: string; client_email: string; quota_used_today: number; quota_reset_at: string }
 
 interface AIStatus { active: boolean; label: string }
 
@@ -16,6 +18,7 @@ const TABS: { key: Tab; label: string; icon: React.ElementType }[] = [
   { key: 'general',       label: 'Cài Đặt Chung',       icon: Settings },
   { key: 'ai_keys',       label: 'API Keys & AI',        icon: Key },
   { key: 'publishing',    label: 'Xuất Bản CMS',         icon: Globe },
+  { key: 'indexing',      label: 'Google Indexing',      icon: Search },
   { key: 'automation',    label: 'Tự Động Hóa',          icon: Zap },
   { key: 'notifications', label: 'Thông Báo',            icon: Bell },
 ]
@@ -39,6 +42,14 @@ export default function SettingsPage() {
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({})
   const [keyTestResult, setKeyTestResult] = useState<Record<string, { ok: boolean; msg: string } | null>>({})
   const [testingKey, setTestingKey] = useState<string | null>(null)
+  // Google Indexing state
+  const [indexProjects, setIndexProjects] = useState<IndexProject[]>([])
+  const [loadingProjects, setLoadingProjects] = useState(false)
+  const [saJson, setSaJson] = useState('')
+  const [projectName, setProjectName] = useState('')
+  const [addingProject, setAddingProject] = useState(false)
+  const [urlsToSubmit, setUrlsToSubmit] = useState('')
+  const [submitting, setSubmitting] = useState(false)
 
   // ── General settings ─────────────────────────────────────────
   const [general, setGeneral] = useState({
@@ -61,11 +72,18 @@ export default function SettingsPage() {
 
   // ── Publishing config ─────────────────────────────────────────
   const [publishConfig, setPublishConfig] = useState({
+    cmsType: 'wordpress' as 'wordpress' | 'laravel',
+    // WordPress REST API
+    wpUrl: '',
+    wpUsername: '',
+    wpAppPassword: '',
+    // Legacy Laravel Puppeteer
     adminUrl: '',
     loginUrl: '',
     createPostUrl: '',
     username: '',
     password: '',
+    // Common
     publishStatus: 'draft',
     slugRule: 'no-accent',
     articlesPerDay: '3',
@@ -88,17 +106,96 @@ export default function SettingsPage() {
   })
 
   useEffect(() => {
-    const saved = localStorage.getItem('seo_platform_config')
-    if (saved) {
-      const cfg = JSON.parse(saved)
-      if (cfg.general) setGeneral(cfg.general)
-      if (cfg.imageSettings) setImageSettings(cfg.imageSettings)
-      if (cfg.publishConfig) setPublishConfig(cfg.publishConfig)
-      if (cfg.automation) setAutomation(cfg.automation)
-      if (cfg.notifications) setNotifications(cfg.notifications)
-    }
+    loadSettings()
     fetchAIStatus()
+    fetch('/api/settings/keys').then(r => r.json()).then(data => {
+      if (data.keys) setApiKeys(data.keys)
+    }).catch(() => {})
   }, [])
+
+  const loadIndexProjects = async () => {
+    setLoadingProjects(true)
+    try {
+      const res = await fetch('/api/google-indexing')
+      const data = await res.json()
+      setIndexProjects(data.projects ?? [])
+    } catch {}
+    setLoadingProjects(false)
+  }
+
+  useEffect(() => { if (tab === 'indexing') loadIndexProjects() }, [tab])
+
+  const handleAddProject = async () => {
+    if (!saJson.trim()) { toast.error('Paste Service Account JSON vào ô trên'); return }
+    setAddingProject(true)
+    try {
+      const res = await fetch('/api/google-indexing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ service_account_json: saJson, project_name: projectName }),
+      })
+      const data = await res.json()
+      if (data.error) { toast.error(data.error); return }
+      toast.success('Đã thêm Service Account!')
+      setSaJson(''); setProjectName('')
+      await loadIndexProjects()
+    } catch (err: unknown) { toast.error(err instanceof Error ? err.message : 'Lỗi') }
+    setAddingProject(false)
+  }
+
+  const handleDeleteProject = async (id: string) => {
+    if (!confirm('Xóa Service Account này?')) return
+    await fetch('/api/google-indexing', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) })
+    setIndexProjects(prev => prev.filter(p => p.id !== id))
+    toast.success('Đã xóa')
+  }
+
+  const handleSubmitUrls = async () => {
+    const urls = urlsToSubmit.split('\n').map(u => u.trim()).filter(Boolean)
+    if (!urls.length) { toast.error('Nhập ít nhất 1 URL'); return }
+    if (!indexProjects.length) { toast.error('Thêm Service Account trước'); return }
+    setSubmitting(true)
+    try {
+      const res = await fetch('/api/google-indexing/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ urls, project_id: indexProjects[0].id }),
+      })
+      const data = await res.json()
+      if (data.error) { toast.error(data.error); return }
+      toast.success(`Đã gửi ${data.submitted}/${data.total} URL tới Google!`)
+      setUrlsToSubmit('')
+      await loadIndexProjects()
+    } catch (err: unknown) { toast.error(err instanceof Error ? err.message : 'Lỗi') }
+    setSubmitting(false)
+  }
+
+  const loadSettings = async () => {
+    try {
+      const res = await fetch('/api/settings')
+      if (!res.ok) throw new Error('not_ok')
+      const data = await res.json()
+      const s = data.settings ?? {}
+      if (s['general'])       setGeneral(s['general'])
+      if (s['imageSettings']) setImageSettings(s['imageSettings'])
+      if (s['publishConfig']) setPublishConfig(s['publishConfig'])
+      if (s['automation'])    setAutomation(s['automation'])
+      if (s['notifications']) setNotifications(s['notifications'])
+    } catch {
+      // Fallback to localStorage for users not yet logged in / DB not migrated
+      const saved = localStorage.getItem('seo_platform_config')
+      if (saved) {
+        try {
+          const cfg = JSON.parse(saved)
+          if (cfg.general)       setGeneral(cfg.general)
+          if (cfg.imageSettings) setImageSettings(cfg.imageSettings)
+          if (cfg.publishConfig) setPublishConfig(cfg.publishConfig)
+          if (cfg.automation)    setAutomation(cfg.automation)
+          if (cfg.notifications) setNotifications(cfg.notifications)
+        } catch {}
+      }
+    }
+  }
 
   const handleTestKey = async (fieldKey: string) => {
     const key = apiKeys[fieldKey]?.trim()
@@ -163,31 +260,80 @@ export default function SettingsPage() {
 
   const handleSave = async () => {
     setSaving(true)
-    localStorage.setItem('seo_platform_config', JSON.stringify({ general, imageSettings, publishConfig, automation, notifications }))
+    try {
+      // Save to Supabase DB
+      const res = await fetch('/api/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ general, imageSettings, publishConfig, automation, notifications }),
+      })
+      if (!res.ok) throw new Error('db_error')
+    } catch {
+      // Fallback: save to localStorage if DB not available
+      localStorage.setItem('seo_platform_config', JSON.stringify({ general, imageSettings, publishConfig, automation, notifications }))
+    }
+
+    // Always mirror publishConfig to localStorage for CMS publisher compatibility
     localStorage.setItem('website_publish_config', JSON.stringify(publishConfig))
-    await new Promise(r => setTimeout(r, 400))
+
+    const hasKeys = Object.values(apiKeys).some(v => v && v.trim().length >= 8)
+    if (hasKeys) {
+      try {
+        const res = await fetch('/api/settings/keys', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keys: apiKeys }),
+        })
+        const data = await res.json()
+        if (data.saved?.length > 0) await fetchAIStatus()
+      } catch {}
+    }
+
     toast.success('Đã lưu toàn bộ cấu hình!')
     setSaving(false)
   }
 
   const handleTestConnection = async () => {
-    if (!publishConfig.adminUrl || !publishConfig.username || !publishConfig.password) {
-      toast.error('Điền đầy đủ URL admin, email và mật khẩu')
-      return
-    }
     setTesting(true)
     toast.info('Đang kết nối...', { duration: 6000 })
     try {
-      const params = new URLSearchParams({ adminUrl: publishConfig.adminUrl, username: publishConfig.username, password: publishConfig.password })
-      const res = await fetch(`/api/publish/laravel?${params}`)
-      const data = await res.json()
-      if (data.loginOk) {
-        toast.success(`✅ Kết nối thành công! Tìm được ${data.categories?.length || 0} danh mục.`)
+      if (publishConfig.cmsType === 'wordpress') {
+        if (!publishConfig.wpUrl || !publishConfig.wpUsername || !publishConfig.wpAppPassword) {
+          toast.error('Điền đầy đủ WordPress URL, username và Application Password')
+          setTesting(false)
+          return
+        }
+        const params = new URLSearchParams({
+          wpUrl: publishConfig.wpUrl,
+          wpUsername: publishConfig.wpUsername,
+          wpAppPassword: publishConfig.wpAppPassword,
+        })
+        const res = await fetch(`/api/publish/wordpress?${params}`)
+        const data = await res.json()
+        if (data.ok) {
+          toast.success(`✅ Kết nối WordPress thành công! Site: ${data.siteName ?? ''} (WP ${data.wpVersion ?? ''})`)
+        } else {
+          toast.error(`Lỗi: ${data.error || 'Sai thông tin'}`)
+        }
       } else {
-        toast.error(`Đăng nhập thất bại: ${data.error || 'Sai thông tin'}`)
+        // Legacy Laravel
+        if (!publishConfig.adminUrl || !publishConfig.username || !publishConfig.password) {
+          toast.error('Điền đầy đủ URL admin, email và mật khẩu')
+          setTesting(false)
+          return
+        }
+        const params = new URLSearchParams({ adminUrl: publishConfig.adminUrl, username: publishConfig.username, password: publishConfig.password })
+        const res = await fetch(`/api/publish/laravel?${params}`)
+        const data = await res.json()
+        if (data.loginOk) {
+          toast.success(`✅ Kết nối Laravel thành công! Tìm được ${data.categories?.length || 0} danh mục.`)
+        } else {
+          toast.error(`Đăng nhập thất bại: ${data.error || 'Sai thông tin'}`)
+        }
       }
-    } catch {
-      toast.error('Không kết nối được. Kiểm tra URL và thông tin đăng nhập.')
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Lỗi kết nối'
+      toast.error(`Không kết nối được: ${msg}`)
     }
     setTesting(false)
   }
@@ -448,41 +594,89 @@ export default function SettingsPage() {
           {/* ══ TAB: PUBLISHING ═══════════════════════════════════════ */}
           {tab === 'publishing' && (
             <div className="bg-white rounded-xl border border-gray-100 p-6">
-              <SectionHeader icon={Globe} title="Quy Trình Xuất Bản & Đồng Bộ CMS" desc="Cấu hình kết nối tới Laravel admin, quy trình đăng bài, trạng thái và slug URL." iconColor="text-green-600 bg-green-50" />
+              <SectionHeader icon={Globe} title="Quy Trình Xuất Bản & Đồng Bộ CMS" desc="Kết nối WordPress REST API hoặc CMS khác để tự động đăng bài." iconColor="text-green-600 bg-green-50" />
 
               <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">URL trang admin *</label>
-                  <input type="url" value={publishConfig.adminUrl} onChange={e => setPublishConfig(p => ({...p, adminUrl: e.target.value}))}
-                    placeholder="https://vuatot.vn/admin"
-                    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
+                {/* CMS Type selector */}
+                <div className="flex gap-3">
+                  {[
+                    { value: 'wordpress', label: '⚡ WordPress REST API', desc: 'Chuẩn — Hoạt động ngay' },
+                    { value: 'laravel',   label: '🔧 Laravel (Puppeteer)', desc: 'Legacy — Chậm hơn' },
+                  ].map(opt => (
+                    <button key={opt.value} onClick={() => setPublishConfig(p => ({...p, cmsType: opt.value as 'wordpress' | 'laravel'}))}
+                      className={cn('flex-1 p-3 rounded-xl border-2 text-left transition-colors',
+                        publishConfig.cmsType === opt.value ? 'border-brand-500 bg-brand-50' : 'border-gray-200 hover:border-gray-300'
+                      )}>
+                      <p className="text-sm font-semibold text-gray-900">{opt.label}</p>
+                      <p className="text-xs text-gray-500 mt-0.5">{opt.desc}</p>
+                    </button>
+                  ))}
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1.5">URL đăng nhập</label>
-                    <input type="url" value={publishConfig.loginUrl} onChange={e => setPublishConfig(p => ({...p, loginUrl: e.target.value}))}
-                      placeholder="https://vuatot.vn/admin/login"
-                      className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
+
+                {/* WordPress fields */}
+                {publishConfig.cmsType === 'wordpress' && (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">URL Website WordPress *</label>
+                      <input type="url" value={publishConfig.wpUrl} onChange={e => setPublishConfig(p => ({...p, wpUrl: e.target.value}))}
+                        placeholder="https://yoursite.com"
+                        className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1.5">Username WordPress *</label>
+                        <input type="text" value={publishConfig.wpUsername} onChange={e => setPublishConfig(p => ({...p, wpUsername: e.target.value}))}
+                          placeholder="admin"
+                          className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1.5">Application Password *</label>
+                        <input type="password" value={publishConfig.wpAppPassword} onChange={e => setPublishConfig(p => ({...p, wpAppPassword: e.target.value}))}
+                          placeholder="xxxx xxxx xxxx xxxx xxxx xxxx"
+                          className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 font-mono" />
+                      </div>
+                    </div>
+                    <div className="p-3 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-700">
+                      <strong>Hướng dẫn:</strong> WP Admin → Users → Profile → Application Passwords → Add New. <strong>Không</strong> dùng mật khẩu đăng nhập thông thường.
+                    </div>
+                  </>
+                )}
+
+                {/* Laravel Puppeteer fields (legacy) */}
+                {publishConfig.cmsType === 'laravel' && (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="col-span-2">
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">URL trang admin *</label>
+                      <input type="url" value={publishConfig.adminUrl} onChange={e => setPublishConfig(p => ({...p, adminUrl: e.target.value}))}
+                        placeholder="https://vuatot.vn/admin"
+                        className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">URL đăng nhập</label>
+                      <input type="url" value={publishConfig.loginUrl} onChange={e => setPublishConfig(p => ({...p, loginUrl: e.target.value}))}
+                        placeholder="https://vuatot.vn/admin/login"
+                        className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">URL tạo bài mới</label>
+                      <input type="url" value={publishConfig.createPostUrl} onChange={e => setPublishConfig(p => ({...p, createPostUrl: e.target.value}))}
+                        placeholder="https://vuatot.vn/admin/blog/posts/create"
+                        className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Email / Tên đăng nhập admin *</label>
+                      <input type="email" value={publishConfig.username} onChange={e => setPublishConfig(p => ({...p, username: e.target.value}))}
+                        placeholder="admin@vuatot.vn"
+                        className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Mật khẩu admin *</label>
+                      <input type="password" value={publishConfig.password} onChange={e => setPublishConfig(p => ({...p, password: e.target.value}))}
+                        placeholder="••••••••"
+                        className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1.5">URL tạo bài mới</label>
-                    <input type="url" value={publishConfig.createPostUrl} onChange={e => setPublishConfig(p => ({...p, createPostUrl: e.target.value}))}
-                      placeholder="https://vuatot.vn/admin/blog/posts/create"
-                      className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Email / Tên đăng nhập admin *</label>
-                    <input type="email" value={publishConfig.username} onChange={e => setPublishConfig(p => ({...p, username: e.target.value}))}
-                      placeholder="admin@vuatot.vn"
-                      className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Mật khẩu admin *</label>
-                    <input type="password" value={publishConfig.password} onChange={e => setPublishConfig(p => ({...p, password: e.target.value}))}
-                      placeholder="••••••••"
-                      className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
-                  </div>
-                </div>
+                )}
 
                 <div className="grid grid-cols-3 gap-4">
                   <Select label="Trạng Thái Khi Gửi Lên CMS" value={publishConfig.publishStatus} onChange={v => setPublishConfig(p => ({...p, publishStatus: v}))} options={[
@@ -520,6 +714,74 @@ export default function SettingsPage() {
                   <strong>Bảo mật:</strong> Thông tin đăng nhập chỉ lưu trên máy tính của bạn (localStorage), không lưu lên server.
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* ══ TAB: GOOGLE INDEXING ════════════════════════════════ */}
+          {tab === 'indexing' && (
+            <div className="space-y-5">
+              <div className="bg-white rounded-xl border border-gray-100 p-6">
+                <SectionHeader icon={Search} title="Google Indexing API" desc="Tự động ping Google yêu cầu crawl khi đăng bài mới. Cần Service Account với quyền Indexing API." iconColor="text-green-600 bg-green-50" />
+
+                {/* Projects list */}
+                {loadingProjects ? (
+                  <div className="flex items-center gap-2 py-4 text-sm text-gray-400"><Loader2 className="w-4 h-4 animate-spin" /> Đang tải...</div>
+                ) : indexProjects.length > 0 ? (
+                  <div className="space-y-3 mb-5">
+                    {indexProjects.map(p => (
+                      <div key={p.id} className="flex items-center gap-3 p-3 bg-green-50 border border-green-100 rounded-xl">
+                        <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold text-gray-900">{p.project_name}</p>
+                          <p className="text-xs text-gray-500">{p.client_email}</p>
+                          <p className="text-xs text-gray-400">Quota: {p.quota_used_today}/200 hôm nay</p>
+                        </div>
+                        <button onClick={() => handleDeleteProject(p.id)} className="p-1.5 text-gray-400 hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mb-5 p-3 bg-yellow-50 border border-yellow-100 rounded-xl text-xs text-yellow-800">
+                    Chưa có Service Account. Tạo tại Google Cloud Console → IAM & Admin → Service Accounts → Enable Indexing API
+                  </div>
+                )}
+
+                {/* Add project */}
+                <div className="space-y-3 border-t border-gray-100 pt-4">
+                  <h4 className="text-sm font-semibold text-gray-700">Thêm Service Account</h4>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5">Tên dự án (tùy chọn)</label>
+                    <input value={projectName} onChange={e => setProjectName(e.target.value)} placeholder="vuatot-indexing"
+                      className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5">Service Account JSON *</label>
+                    <textarea value={saJson} onChange={e => setSaJson(e.target.value)} rows={6}
+                      placeholder={'{\n  "type": "service_account",\n  "project_id": "...",\n  "private_key": "-----BEGIN RSA PRIVATE KEY-----\\n...",\n  "client_email": "...@....iam.gserviceaccount.com"\n}'}
+                      className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-brand-500 resize-none" />
+                  </div>
+                  <button onClick={handleAddProject} disabled={addingProject || !saJson.trim()}
+                    className="flex items-center gap-2 bg-brand-600 text-white px-4 py-2.5 rounded-lg text-sm font-semibold hover:bg-brand-700 disabled:opacity-50">
+                    {addingProject ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                    Thêm Service Account
+                  </button>
+                </div>
+              </div>
+
+              {/* URL submission */}
+              {indexProjects.length > 0 && (
+                <div className="bg-white rounded-xl border border-gray-100 p-6">
+                  <SectionHeader icon={Globe} title="Submit URL thủ công" desc="Gửi tối đa 200 URL/ngày/project. Mỗi URL 1 dòng." iconColor="text-blue-600 bg-blue-50" />
+                  <textarea value={urlsToSubmit} onChange={e => setUrlsToSubmit(e.target.value)} rows={6}
+                    placeholder={"https://vuatot.vn/bai-viet-1\nhttps://vuatot.vn/bai-viet-2"}
+                    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-500 resize-none mb-3" />
+                  <button onClick={handleSubmitUrls} disabled={submitting || !urlsToSubmit.trim()}
+                    className="flex items-center gap-2 bg-green-600 text-white px-4 py-2.5 rounded-lg text-sm font-semibold hover:bg-green-700 disabled:opacity-50">
+                    {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                    Submit tới Google Indexing API
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -605,7 +867,7 @@ export default function SettingsPage() {
 
       {/* Footer save button */}
       <div className="px-6 py-4 bg-white border-t border-gray-100 flex items-center justify-between">
-        <p className="text-xs text-gray-400">Cài đặt được lưu cục bộ trên trình duyệt</p>
+        <p className="text-xs text-gray-400">Cài đặt được lưu vào tài khoản, đồng bộ mọi thiết bị</p>
         <button
           onClick={handleSave}
           disabled={saving}

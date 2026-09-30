@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Search, Loader2, TrendingUp, Zap, Brain, BarChart3, ExternalLink } from 'lucide-react'
+import { Search, Loader2, TrendingUp, Zap, Brain, BarChart3, Download, CheckSquare } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import Link from 'next/link'
@@ -36,6 +36,24 @@ export default function KeywordsPage() {
   const [loading, setLoading] = useState(false)
   const [results, setResults] = useState<KeywordResult[]>([])
   const [source, setSource] = useState('')
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+
+  const toggleSelect = (kw: string) =>
+    setSelected(prev => { const n = new Set(prev); n.has(kw) ? n.delete(kw) : n.add(kw); return n })
+
+  const handleExportCSV = () => {
+    if (!results.length) { toast.error('Chưa có kết quả để xuất'); return }
+    const rows = [
+      ['Từ khóa', 'Volume', 'KD', 'Intent', 'CPC', 'Difficulty', 'Opportunity Score'],
+      ...results.map(r => [r.keyword, r.volume ?? '', r.kd ?? '', r.intent, r.cpc ?? '', r.difficulty_label ?? '', r.opportunity_score ?? '']),
+    ]
+    const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href = url; a.download = `keywords-${seed}-${Date.now()}.csv`; a.click()
+    URL.revokeObjectURL(url)
+    toast.success(`Đã xuất ${results.length} từ khóa`)
+  }
 
   const handleSearch = async (keyword = seed) => {
     if (!keyword.trim()) { toast.error('Nhập từ khóa seed để tìm kiếm'); return }
@@ -132,20 +150,44 @@ export default function KeywordsPage() {
       {results.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
           <div className="flex items-center justify-between px-5 py-3 border-b border-gray-50 bg-gray-50/50">
-            <div className="grid grid-cols-12 w-full text-xs font-semibold text-gray-500 uppercase tracking-wider gap-2">
-              <div className="col-span-4">Từ khóa</div>
-              <div className="col-span-2 text-center">Volume/tháng</div>
-              <div className="col-span-1 text-center">KD</div>
-              <div className="col-span-2 text-center">Intent</div>
-              <div className="col-span-1 text-center">CPC</div>
-              <div className="col-span-2 text-right">Thao tác</div>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-gray-500 font-medium">{results.length} từ khóa</span>
+              {selected.size > 0 && (
+                <Link
+                  href={`/dashboard/content/new?keyword=${encodeURIComponent(Array.from(selected)[0])}`}
+                  className="flex items-center gap-1 text-xs bg-brand-600 text-white px-2.5 py-1 rounded-lg hover:bg-brand-700">
+                  <Zap className="w-3 h-3" /> Viết {selected.size} bài đã chọn
+                </Link>
+              )}
             </div>
+            <div className="flex items-center gap-2">
+              <button onClick={() => setSelected(new Set(results.map(r => r.keyword)))}
+                className="flex items-center gap-1 text-xs text-gray-500 border border-gray-200 px-2.5 py-1.5 rounded-lg hover:bg-gray-50">
+                <CheckSquare className="w-3 h-3" /> Chọn tất cả
+              </button>
+              <button onClick={handleExportCSV}
+                className="flex items-center gap-1 text-xs text-gray-600 border border-gray-200 px-2.5 py-1.5 rounded-lg hover:bg-gray-50">
+                <Download className="w-3 h-3" /> Xuất CSV
+              </button>
+            </div>
+          </div>
+          <div className="grid grid-cols-12 w-full text-xs font-semibold text-gray-500 uppercase tracking-wider gap-2 px-5 py-2 border-b border-gray-50">
+            <div className="col-span-1" />
+            <div className="col-span-3">Từ khóa</div>
+            <div className="col-span-2 text-center">Volume/tháng</div>
+            <div className="col-span-1 text-center">KD</div>
+            <div className="col-span-2 text-center">Intent</div>
+            <div className="col-span-1 text-center">CPC</div>
+            <div className="col-span-2 text-right">Thao tác</div>
           </div>
 
           <div className="divide-y divide-gray-50">
             {results.map((kw, idx) => (
-              <div key={idx} className="grid grid-cols-12 items-center gap-2 px-5 py-3.5 hover:bg-gray-50/50 transition-colors">
-                <div className="col-span-4">
+              <div key={idx} className={cn('grid grid-cols-12 items-center gap-2 px-5 py-3.5 hover:bg-gray-50/50 transition-colors', selected.has(kw.keyword) && 'bg-brand-50/50')}>
+                <div className="col-span-1 flex items-center">
+                  <input type="checkbox" checked={selected.has(kw.keyword)} onChange={() => toggleSelect(kw.keyword)} className="accent-brand-600 w-4 h-4" />
+                </div>
+                <div className="col-span-3">
                   <p className="text-sm font-medium text-gray-900">{kw.keyword}</p>
                   {kw.title && <p className="text-xs text-gray-400 truncate mt-0.5">{kw.title}</p>}
                   {kw.difficulty_label && (

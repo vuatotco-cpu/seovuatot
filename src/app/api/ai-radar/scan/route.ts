@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createClient } from '@/lib/supabase/server'
 import { generateWithAI } from '@/lib/ai-router'
 
 export const maxDuration = 60
 
 export async function POST(req: NextRequest) {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
   const { website, niche } = await req.json()
 
   const prompt = `Phân tích website "${website}" (${niche || 'sàn thương mại điện tử đồ cũ Việt Nam'}) và tìm 15-20 cơ hội từ khóa SEO tiềm năng nhất cho năm 2026.

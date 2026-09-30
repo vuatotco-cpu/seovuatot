@@ -1,36 +1,55 @@
 'use client'
 
-import { Globe, Link2, TrendingUp, Search, BarChart3, Loader2 } from 'lucide-react'
-import { useState } from 'react'
+import { Globe, Link2, TrendingUp, Search, BarChart3, Loader2, AlertCircle } from 'lucide-react'
+import { useState, useEffect, Suspense } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
 
-const mockGSCData = [
-  { query: 'mua bán đồ cũ uy tín', clicks: 234, impressions: 4200, ctr: 5.6, position: 4.2 },
-  { query: 'thanh lý đồ cũ hà nội', clicks: 189, impressions: 3100, ctr: 6.1, position: 3.8 },
-  { query: 'chợ đồ cũ online việt nam', clicks: 156, impressions: 2800, ctr: 5.6, position: 5.1 },
-  { query: 'mua laptop cũ giá rẻ hà nội', clicks: 142, impressions: 2400, ctr: 5.9, position: 6.3 },
-  { query: 'bán điện thoại cũ giá cao', clicks: 98, impressions: 1900, ctr: 5.2, position: 7.2 },
-  { query: 'vua tốt mua bán', clicks: 87, impressions: 950, ctr: 9.2, position: 2.1 },
-  { query: 'rao vặt đồ cũ miễn phí', clicks: 76, impressions: 1600, ctr: 4.8, position: 8.4 },
-  { query: 'thanh lý nội thất cũ', clicks: 65, impressions: 1200, ctr: 5.4, position: 6.9 },
-]
+interface GSCRow { query: string; clicks: number; impressions: number; ctr: number; position: number }
+interface GSCSummary { impressions: number; clicks: number; avgCtr: number; avgPosition: number; rows: GSCRow[] }
 
-export default function GoogleConsolePage() {
+function GoogleConsoleInner() {
+  const searchParams = useSearchParams()
   const [connected, setConnected] = useState(false)
-  const [connecting, setConnecting] = useState(false)
+  const [gscData, setGscData] = useState<GSCSummary | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [noClientId, setNoClientId] = useState(false)
 
-  const handleConnect = async () => {
-    setConnecting(true)
-    await new Promise(r => setTimeout(r, 2000))
-    setConnected(true)
-    setConnecting(false)
-    toast.success('Đã kết nối Google Search Console!')
+  useEffect(() => {
+    // Check for OAuth callback result
+    if (searchParams.get('connected') === 'true') {
+      toast.success('Đã kết nối Google Search Console thành công!')
+    }
+    if (searchParams.get('error')) {
+      toast.error(`Lỗi kết nối GSC: ${searchParams.get('error')}`)
+    }
+    checkConnection()
+  }, [])
+
+  const checkConnection = async () => {
+    setLoading(true)
+    try {
+      const res = await fetch('/api/gsc/status')
+      const data = await res.json()
+      if (data.connected) {
+        setConnected(true)
+        setGscData(data.summary ?? null)
+      }
+      if (data.noClientId) setNoClientId(true)
+    } catch {}
+    setLoading(false)
   }
 
-  const totalClicks = mockGSCData.reduce((s, r) => s + r.clicks, 0)
-  const totalImpressions = mockGSCData.reduce((s, r) => s + r.impressions, 0)
-  const avgCTR = (mockGSCData.reduce((s, r) => s + r.ctr, 0) / mockGSCData.length).toFixed(1)
-  const avgPosition = (mockGSCData.reduce((s, r) => s + r.position, 0) / mockGSCData.length).toFixed(1)
+  const handleConnect = () => {
+    // Redirect to OAuth flow
+    window.location.href = '/api/auth/gsc'
+  }
+
+  const rows = gscData?.rows ?? []
+  const totalClicks      = gscData?.clicks ?? 0
+  const totalImpressions = gscData?.impressions ?? 0
+  const avgCTR           = gscData ? gscData.avgCtr.toFixed(1) : '0.0'
+  const avgPosition      = gscData ? gscData.avgPosition.toFixed(1) : '0.0'
 
   return (
     <div className="p-6 space-y-6">
@@ -39,7 +58,11 @@ export default function GoogleConsolePage() {
         <p className="text-gray-500 text-sm mt-0.5">Theo dõi clicks, impressions, CTR và thứ hạng từ khóa</p>
       </div>
 
-      {!connected ? (
+      {loading ? (
+        <div className="flex items-center justify-center py-20">
+          <Loader2 className="w-8 h-8 animate-spin text-brand-600" />
+        </div>
+      ) : !connected ? (
         <div className="bg-white rounded-xl border border-gray-100 p-8 text-center">
           <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
             <Globe className="w-8 h-8 text-blue-600" />
@@ -48,10 +71,25 @@ export default function GoogleConsolePage() {
           <p className="text-gray-500 mb-6 max-w-md mx-auto">
             Kết nối GSC để theo dõi thứ hạng từ khóa, clicks, impressions và tối ưu SEO website của bạn.
           </p>
+
+          {noClientId && (
+            <div className="flex items-start gap-3 p-4 bg-yellow-50 border border-yellow-200 rounded-xl mb-6 text-left max-w-md mx-auto">
+              <AlertCircle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold text-yellow-800">Cần cấu hình Google OAuth2</p>
+                <p className="text-xs text-yellow-700 mt-1">Thêm <code className="bg-yellow-100 px-1 rounded">GOOGLE_CLIENT_ID</code> và <code className="bg-yellow-100 px-1 rounded">GOOGLE_CLIENT_SECRET</code> vào .env.local.</p>
+                <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer"
+                  className="text-xs text-yellow-700 font-semibold hover:underline mt-1 inline-block">
+                  Tạo OAuth2 credentials →
+                </a>
+              </div>
+            </div>
+          )}
+
           <div className="flex items-start gap-4 max-w-lg mx-auto mb-8 text-left">
             {[
               { step: '1', text: 'Nhấn "Kết nối GSC" và đăng nhập Google' },
-              { step: '2', text: 'Chọn website đã xác minh trong GSC' },
+              { step: '2', text: 'Cấp quyền truy cập Search Console' },
               { step: '3', text: 'Xem dữ liệu thứ hạng ngay lập tức' },
             ].map(s => (
               <div key={s.step} className="flex-1 text-center">
@@ -62,11 +100,11 @@ export default function GoogleConsolePage() {
           </div>
           <button
             onClick={handleConnect}
-            disabled={connecting}
+            disabled={noClientId}
             className="flex items-center gap-2 bg-blue-600 text-white px-6 py-3 rounded-xl font-semibold hover:bg-blue-700 transition-colors mx-auto disabled:opacity-50"
           >
-            {connecting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Link2 className="w-5 h-5" />}
-            {connecting ? 'Đang kết nối...' : 'Kết nối Google Search Console'}
+            <Link2 className="w-5 h-5" />
+            Kết nối Google Search Console
           </button>
         </div>
       ) : (
@@ -106,7 +144,7 @@ export default function GoogleConsolePage() {
               <div className="col-span-2 text-center">Vị trí</div>
             </div>
             <div className="divide-y divide-gray-50">
-              {mockGSCData.map((row, idx) => (
+              {rows.map((row, idx) => (
                 <div key={idx} className="grid grid-cols-12 px-4 py-3.5 hover:bg-gray-50 transition-colors items-center">
                   <div className="col-span-5">
                     <p className="text-sm text-gray-900">{row.query}</p>
@@ -132,5 +170,13 @@ export default function GoogleConsolePage() {
         </>
       )}
     </div>
+  )
+}
+
+export default function GoogleConsolePage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-brand-600" /></div>}>
+      <GoogleConsoleInner />
+    </Suspense>
   )
 }

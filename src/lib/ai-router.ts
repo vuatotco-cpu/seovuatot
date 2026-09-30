@@ -38,7 +38,7 @@ export async function generateWithAI(
     tryClaude('claude-sonnet-4-5'),
     tryClaude('claude-haiku-4-5-20251001'),
     tryGemini('gemini-1.5-pro'),
-    tryGroq('llama-3.1-70b-versatile'),
+    tryGroq('llama-3.3-70b-versatile'),
     tryGPT4o('gpt-4o'),
     tryDeepSeek('deepseek-chat'),
   ]
@@ -127,30 +127,43 @@ function tryGPT4o(model: string) {
   }
 }
 
-// Groq (OpenAI-compatible, free tier — Llama 3.1 70B)
-function tryGroq(model: string) {
+// Danh sách model Groq theo thứ tự ưu tiên (tự động thử lần lượt)
+const GROQ_MODELS = [
+  'openai/gpt-oss-120b',
+  'openai/gpt-oss-20b',
+  'qwen/qwen3.8-27b',
+  'allam-2-7b',
+]
+
+// Groq (OpenAI-compatible, free tier)
+function tryGroq(_preferredModel: string) {
   return async (prompt: string, systemPrompt: string): Promise<AITextResult | null> => {
     const apiKey = process.env.GROQ_API_KEY
     if (!apiKey || apiKey.includes('...') || apiKey.length < 10) return null
 
     const { default: OpenAI } = await import('openai')
-    const client = new OpenAI({
-      apiKey,
-      baseURL: 'https://api.groq.com/openai/v1',
-    })
+    const client = new OpenAI({ apiKey, baseURL: 'https://api.groq.com/openai/v1' })
 
-    const res = await client.chat.completions.create({
-      model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: prompt },
-      ],
-      max_tokens: 4096,
-    })
-
-    const content = res.choices[0]?.message?.content || ''
-    if (!content) return null
-    return { content, model, provider: 'groq' }
+    for (const model of GROQ_MODELS) {
+      try {
+        const res = await client.chat.completions.create({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: prompt },
+          ],
+          max_tokens: 4096,
+        })
+        const content = res.choices[0]?.message?.content || ''
+        if (!content) continue
+        return { content, model, provider: 'groq' }
+      } catch (err: any) {
+        // Thử model tiếp theo nếu model này không tồn tại hoặc lỗi limit
+        if (err?.status === 404 || err?.status === 400) continue
+        throw err
+      }
+    }
+    return null
   }
 }
 

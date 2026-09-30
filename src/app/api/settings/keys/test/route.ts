@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createClient } from '@/lib/supabase/server'
 
 const TEST_PROMPT = 'Trả lời đúng 1 từ: "OK"'
 
 // POST { provider, key }  →  { ok, model, latency, error }
 export async function POST(req: NextRequest) {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 })
+
   const { provider, key } = await req.json()
   if (!provider || !key) {
     return NextResponse.json({ ok: false, error: 'Thiếu provider hoặc key' }, { status: 400 })
@@ -42,13 +47,28 @@ export async function POST(req: NextRequest) {
       case 'groq': {
         const { default: OpenAI } = await import('openai')
         const client = new OpenAI({ apiKey: key, baseURL: 'https://api.groq.com/openai/v1' })
-        const res = await client.chat.completions.create({
-          model: 'llama-3.1-8b-instant',
-          messages: [{ role: 'user', content: TEST_PROMPT }],
-          max_tokens: 10,
-        })
-        result = res.choices[0]?.message?.content || null
-        model = 'llama-3.1-8b-instant'
+        const GROQ_MODELS = [
+          'openai/gpt-oss-120b',
+          'openai/gpt-oss-20b',
+          'qwen/qwen3.8-27b',
+          'allam-2-7b',
+        ]
+        let lastErr = ''
+        for (const m of GROQ_MODELS) {
+          try {
+            const res = await client.chat.completions.create({
+              model: m, messages: [{ role: 'user', content: TEST_PROMPT }], max_tokens: 50,
+            })
+            result = res.choices[0]?.message?.content || null
+            model = m
+            break
+          } catch (e: any) {
+            lastErr = e.message
+            if (e?.status === 404 || e?.status === 400) continue
+            throw e
+          }
+        }
+        if (!result) throw new Error(lastErr || 'Không có model Groq nào hoạt động')
         break
       }
 

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createClient } from '@/lib/supabase/server'
 import fs from 'fs'
 import path from 'path'
 
@@ -26,18 +27,33 @@ function upsertEnvLine(content: string, name: string, value: string): string {
     : content.trimEnd() + `\n${name}=${value}\n`
 }
 
-// GET — trả về những key nào đang active (không trả về giá trị thật)
+const PLACEHOLDERS = ['...', 'your-', 'sk-ant-api03']
+function isReal(val: string | undefined): boolean {
+  return !!(val && val.trim().length > 10 && !PLACEHOLDERS.some(p => val.includes(p)))
+}
+
+// GET — trả về key values thật để pre-fill UI (yêu cầu đăng nhập)
 export async function GET() {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const keys: Record<string, string> = {}
   const active: Record<string, boolean> = {}
   for (const [field, envVar] of Object.entries(KEY_MAP)) {
     const val = process.env[envVar]
-    active[field] = !!(val && val.trim().length > 10 && !val.includes('...') && !val.includes('gsk_...') && !val.includes('sk-ant-...') && !val.includes('sk-...') && !val.includes('AIza...') && !val.includes('your-'))
+    active[field] = isReal(val)
+    keys[field] = isReal(val) ? (val as string).trim() : ''
   }
-  return NextResponse.json({ active })
+  return NextResponse.json({ active, keys })
 }
 
 // POST — lưu key vào process.env + .env.local
 export async function POST(req: NextRequest) {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
   const { keys } = (await req.json()) as { keys: Record<string, string> }
 
   const PLACEHOLDER_PATTERNS = ['...', 'your-', 'sk-ant-api03']
